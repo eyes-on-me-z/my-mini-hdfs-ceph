@@ -43,7 +43,7 @@ namespace mini_storage
         /*
         把当前缓冲区 buffer_ 里的一批 key-value 写成一个 DataBlock 到 SSTable 文件里，并为这个块生成索引
         每落盘一次，index_block_中就追加 [last_key_长度][last_key_内容][buffer_在文件中的起始字节][buffer_长度+4]
-        file_中包含 buffer_ 和crc
+        每刷一个 DataBlock，就记录一条索引
         */
 
         if (buffer_.empty()) return;

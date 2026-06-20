@@ -62,6 +62,7 @@ namespace mini_storage
         return len;
     }
 
+    // 出错返回 -1
     int DecodeVarint32(const char *buf, uint32_t *value)
     {
         *value = 0;
