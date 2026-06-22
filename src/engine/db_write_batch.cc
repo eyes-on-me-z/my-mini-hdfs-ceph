@@ -12,7 +12,7 @@ namespace mini_storage
         Clear();
     }
 
-    //写入操作
+    // 写入操作
     void WriteBatch::Put(const std::string &key, const std::string &value)
     {
         // 更新 Count
@@ -26,7 +26,7 @@ namespace mini_storage
         EncodeString(&rep_, value);
     }
 
-    //删除操作
+    // 删除操作
     void WriteBatch::Delete(const std::string &key)
     {
         uint32_t count = DecodeFixed32(&rep_[8]);
@@ -67,7 +67,7 @@ namespace mini_storage
         return DecodeFixed64(rep_.data());
     }
 
-    //将batch里的操作逐个分发给handler
+    // 将batch里的操作逐个分发给handler
     bool WriteBatch::Iterate(Handler *handler) const
     {
         // 【核心修复点】

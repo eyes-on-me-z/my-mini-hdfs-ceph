@@ -5,6 +5,10 @@
 
 namespace mini_storage
 {
+    /*
+    不管是写入操作还是删除操作，都是往rep_里面写入 "[写入/删除]key"
+    */
+
     // 一次数据库写入操作的“打包器”和“可回放日志格式”
     class WriteBatch
     {
@@ -12,10 +16,10 @@ namespace mini_storage
         WriteBatch();
         ~WriteBatch() = default;
 
-        //写入操作
+        // 写入操作
         void Put(const std::string &key, const std::string &value);
 
-        //删除操作
+        // 删除操作
         // 这里并没有真正删除数据，它只是把“我要删除这个 key”这条操作记录进 rep_ 里
         void Delete(const std::string &key);
 
@@ -47,9 +51,9 @@ namespace mini_storage
 
     private:
         std::string rep_;
-        //rep_格式
-		// [Fixed64: Sequence Number] 
-		// [Fixed32: Count] 
+        // rep_格式
+		// [Fixed64: Sequence Number] 8字节
+		// [Fixed32: Count]           4字节
 		// [Records...]
 		// Record 格式: [Type(1 byte)] [KeyLen(Varint)] [Key] [ValueLen(Varint)] [Value]
     };

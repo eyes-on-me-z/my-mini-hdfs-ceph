@@ -12,7 +12,7 @@ namespace mini_storage
         explicit LogReader(const std::string &filename);
         ~LogReader();
 
-        // 读取下一条记录
+        // 读取下一条记录（一次读一条WAL）
 		// 返回true表示读取成功，record填充记录内容
 		// 返回false表示文件结束或出错
         bool ReadRecord(std::string *record);

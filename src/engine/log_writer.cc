@@ -8,8 +8,8 @@ namespace mini_storage
     LogWriter::LogWriter(const std::string &filename, bool truncate)
         :filename_(filename), ok_(true), block_offset_(0)
     {
-        //修改点：使用out|app确保文件不存在时创建，存在时追加
-        // truncate=true 用于刷盘后重建日志（清空旧文件）
+        // 修改点：使用out|app确保文件不存在时创建，存在时追加
+        // truncate=true 用于刷盘后重建日志（清空旧文件），打开文件时，如果文件已经存在，就把文件内容截断为 0 字节
         // truncate=false（默认）用于正常追加写，文件不存在时自动创建
         auto mode = std::ios::binary | std::ios::out | 
             (truncate ? std::ios::trunc : std::ios::app);

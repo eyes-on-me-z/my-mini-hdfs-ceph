@@ -15,12 +15,12 @@ namespace mini_storage
         explicit LogWriter(const std::string &filename, bool truncate = false);
         ~LogWriter();
         
-        //追加一条记录
-		//内部会自动添加CRC32校验
+        // 追加一条记录
+		// 内部会自动添加CRC32校验
         bool AddRecord(const std::string &data);
 
-        //强制刷新到磁盘(fsync)
-		//只在需要强持久化时调用（有性能开销）
+        // 强制刷新到磁盘(fsync)
+		// 只在需要强持久化时调用（有性能开销）
         bool Sync();
 
         bool Ok() const { return ok_; }
