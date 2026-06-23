@@ -11,6 +11,9 @@ namespace mini_storage
 {
     /*
     一个 DB 实例，对应一个当前 WAL 文件：current.log
+
+    Put/Delete -> 先写 WAL -> 再写 MemTable -> MemTable 满了，刷成 SSTable -> 刷盘成功后，清空/重建 WAL
+    WAL 只负责保护“还没落盘到 SSTable 的 MemTable 数据”
     */
 
     struct Options
@@ -31,10 +34,13 @@ namespace mini_storage
         DB(const DB&) = delete;
         DB& operator=(const DB&) = delete;
 
+        // 对外 public 方法加锁，内部 private helper 假设调用者已经持有锁
+
         // 核心接口
         bool Put(const std::string &key, const std::string &value);
         bool Delete(const std::string &key);
         bool Get(const std::string &key, std::string *value);
+        
         void FlushMemTable();   // 手动触发刷盘(供测试使用)
         void Compaction();      // 手动触发compaction(供测试使用)
 
