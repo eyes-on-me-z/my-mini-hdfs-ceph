@@ -34,3 +34,12 @@ EPOLLOUT  // 可写
 EPOLLERR  // 错误
 EPOLLHUP  // 对端关闭或挂起
 EPOLLET   // 边缘触发模式
+
+为什么要设置 SO_REUSEADDR？
+服务器程序经常绑定一个固定端口，比如：0.0.0.0:9000。如果服务器刚退出又马上重启，端口可能还处于 TIME_WAIT 等状态。没有 SO_REUSEADDR 时，bind() 可能失败，报：Address already in use。设置后，通常可以更快重新启动服务并绑定同一个端口。
+
+.join()：等待线程结束
+当前线程会阻塞，直到目标线程运行完毕。
+.detach()：让线程独立运行
+当前线程不再等待，也无法再通过该 std::thread 对象控制或等待它。
+一个可运行的 std::thread 在析构前必须调用 join() 或 detach() 其中之一；否则程序会调用 std::terminate()。线程池通常应使用 join()，而不是 detach()。
