@@ -6,6 +6,7 @@ message WriteBlockRequest
     uint64 block_id = 1;
     bytes data = 2;                 // std::string data;
     // client -> datanode1 -> datanode2 -> datanode3
+    // ["127.0.0.1:9002", "127.0.0.1:9003"]
     repeated string pipeline = 3;   // std::vector<std::string> pipeline;
 }
 
@@ -50,8 +51,7 @@ message DataNodeRequest
         DELETE_BLOCK = 2;
     };
     OpType op = 1;          // 表示当前请求的操作类型
-    uint64 request_id = 2;  // 请求 ID。一般用来匹配请求和响应，比如客户端发出第 1001 号请求，
-                            // DataNode 返回响应时也带上 request_id = 1001，这样调用方知道这是哪次请求的结果
+    uint64 request_id = 2;  // 请求 ID (block_id)
     WriteBlockRequest write_block = 10;
     ReadBlockRequest read_block = 11;
     DeleteBlockRequest delete_block = 12;
