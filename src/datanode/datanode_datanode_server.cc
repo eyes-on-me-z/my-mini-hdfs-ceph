@@ -7,6 +7,10 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
+/*
+关于客户端的未完成
+*/
+
 namespace mini_storage
 {
     DataNodeServer::DataNodeServer(const std::string &data_dir,
