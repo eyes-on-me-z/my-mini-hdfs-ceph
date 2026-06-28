@@ -67,3 +67,9 @@ while (true) {
 
 
 select、poll、epoll的区别是什么
+
+
+
+
+
+![屏幕截图 2026-06-28 154035](note.assets/屏幕截图 2026-06-28 154035.png)
