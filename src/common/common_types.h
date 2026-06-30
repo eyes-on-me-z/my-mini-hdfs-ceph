@@ -11,8 +11,10 @@ namespace mini_storage
     using FilePath = std::string;
     using DataNodeId = std::string;
 
-    constexpr BlockId kInvalidBlockId = 0;      // 定义一个编译期常量，表示“无效的 block ID”
-    constexpr int kHeartbeatTimeoutSec = 30;    // DataNode 心跳超时时间是 30 秒
+    constexpr BlockId kInvalidBlockId = 0;          // 定义一个编译期常量，表示“无效的 block ID”
+    constexpr int64_t kBlockSize = 4 *1024 * 1024;  //  4MB 逻辑 block 大小
+    constexpr int kReplicationFactor = 3;           // 默认的 block 副本数
+    constexpr int kHeartbeatTimeoutSec = 30;        // DataNode 心跳超时时间是 30 秒
 
     // NameNode 里描述一个 block 的元数据信息
     struct BlockInfo
