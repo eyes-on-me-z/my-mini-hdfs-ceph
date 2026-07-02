@@ -1,0 +1,141 @@
+syntax = "proto3";
+package mini_storage;
+
+// 客户端向 NameNode 发起“创建文件”请求时携带的参数
+message CreateFileRequest
+{
+    string path = 1;    // 请求创建一个路径为 path 的文件
+}
+
+// 客户端向 NameNode 请求“给某个文件分配一个新 block”时用的请求体
+message AllocateBlockRequest
+{
+    string file_path = 1;   // 表示这个新 block 属于哪个文件
+}
+
+message AllocateBlockResponse
+{
+    bool success = 1;
+    uint64 block_id = 2;    // 分配到的 block id 是多少
+    repeated string datanode_addresses = 3; // 这个 block 应该写入的 DataNode 地址列表
+    string error = 4;
+}
+
+// 这个文件由哪些 block 组成，这些 block 分别在哪些 DataNode 上
+message GetFileBlocksRequest
+{
+    string path = 1;    // 要读取的文件路径
+}
+
+message GetFileBlocksResponse
+{
+    bool success = 1;
+    string path = 2;    // 文件路径
+    int64 size = 3;     // 整个文件的大小
+    message BlockLocation   // 一个 block 的位置信息
+    {
+        uint64 block_id = 1;    // block 编号
+        int64 size = 2;         // 这个 block 的大小
+        repeated string datanodes = 3;  // 保存这个 block 副本的 DataNode 地址列表
+    }
+    repeated BlockLocation blocks = 4;  // 文件包含的所有 block
+    string error = 5;
+}
+
+// 客户端向 NameNode 请求删除文件
+message DeleteFileRequest
+{
+    string path = 1;    // 要删除的文件路径
+}
+
+// 客户端向 NameNode 请求“列出文件”
+message ListFilesRequest
+{
+    string dir = 1; // 要列出哪个目录/前缀下的文件
+}
+
+message ListFilesResponse
+{
+    bool success = 1;
+    message FileSummary
+    {
+        string path = 1;    // 文件路径
+        int64 size = 2;     // 文件大小
+        int64 create_time = 3;  // 创建时间
+        int32 block_count = 4;  // 这个文件包含多少个 block
+    }
+    repeated FileSummary files = 2;
+}
+
+// DataNode 向 NameNode 注册自己
+message RegisterDataNodeRequest
+{
+    string datanode_id = 1; // DataNode 的唯一 ID ip:port
+    string host = 2;        // DataNode 的主机地址
+    int32 port = 3;         // DataNode 监听的端口号
+    int64 free_space = 4;   // DataNode 当前剩余可用空间
+}   
+
+message HeartbeatRequest
+{
+    string datanode_id = 1; // 发送心跳的 DataNode ID
+    int64 timestamp = 2;    // 心跳发送时间
+    int64 free_space = 3;   // DataNode 当前剩余空间
+    int64 block_count = 4;  // DataNode 当前保存的 block 数量
+}
+
+// DataNode 上报的一个 block 的信息
+message BlockReportItem
+{
+    uint64 block_id = 1;    // block 的唯一 ID
+    int64 size = 2;         // 这个 block 的大小
+    uint32 crc32 = 3;       // 这个 block 的 CRC32 校验值
+}
+
+// DataNode 向 NameNode 上报自己当前保存了哪些 block 的请求
+message BlockReportRequest
+{
+    string datanode_id = 1; // 上报的 DataNode ID
+    repeated BlockReportItem blocks = 2;    //该 DataNode 当前持有的 block 列表
+}
+
+message NameNodeRequest
+{
+    enum OpType
+    {
+        CREATE_FILE = 0;        // 客户端请求创建文件
+        ALLOCATE_BLOCK = 1;     // 客户端写文件时，请求 NameNode 分配一个新的 block，并返回应该写入哪些 DataNode
+        GET_FILE_BLOCKS = 2;    // 客户端读文件时，请求获取这个文件包含哪些 block，以及每个 block 在哪些 DataNode 上
+        DELETE_FILE = 3;        // 删除文件元数据
+        LIST_FILES = 4;         // 列出文件列表
+        REGISTER_DN = 5;        // DataNode 启动后向 NameNode 注册
+        HEARTBEAT = 6;          // DataNode 定期向 NameNode 发送心跳，表示自己还活着，并汇报状态信息，比如空闲空间、block 数量
+        BLOCK_REPORT = 8;       // DataNode 向 NameNode 汇报自己本地保存了哪些 block，以及这些 block 的大小、CRC 等信息
+    }
+    OpType op = 1;  // 用来告诉 NameNode：这次请求要执行什么操作
+    uint64 request_id = 2;
+
+    CreateFileRequest create_file = 10;
+    AllocateBlockRequest allocate_block = 11;
+    GetFileBlocksRequest get_file_blocks = 12;
+    DeleteFileRequest delete_file = 13;
+    ListFilesRequest list_files = 14;
+    RegisterDataNodeRequest register_dn = 15;
+    HeartbeatRequest heartbeat = 16;
+    BlockReportRequest block_report = 18;
+}
+
+message NameNodeResponse
+{
+    // 三个通用字段, 对于一些简单操作，只需要返回成功或失败就够了
+    // CreateFile、DeleteFile、RegisterDataNode、Heartbeat、BlockReport
+    uint64 request_id = 1;
+    bool success = 2;
+    string error = 3;
+
+    //不是每个操作都需要单独定义一个复杂的 Response
+    // create_file response is inline (just success/error at top level)
+    AllocateBlockResponse allocate_block = 11;
+    GetFileBlocksResponse get_file_blocks = 12;
+    ListFilesResponse list_files = 14;
+}
