@@ -10,8 +10,15 @@ namespace mini_storage
     {}
 
     // 扫描全部 block，返回所有副本不足的 block
+    // 根据 NameNode 中保存的文件/block 元数据，以及 DataNodeManager 维护的 DataNode 存活状态，
+    // 来判断 block 的有效副本数量是否不足
     std::vector<UnderReplicatedBlock> ReplicationMonitor::ScanUnderReplicated()
     {
+        /*
+        不是直接读取 DataNode 本地磁盘元数据来判断的。
+        它关注的是“副本数量”，不负责验证 block 内容是否真的损坏；内容损坏这部分由 ConsistencyChecker 做
+        */
+
         std::vector<UnderReplicatedBlock> results;
 
         // 获取所有存活 DN 的 ID 集合，用于快速查找（那为什么不用哈希表呢）

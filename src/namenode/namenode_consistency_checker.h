@@ -18,6 +18,8 @@ namespace mini_storage
         std::string error;          // 错误信息
     };
 
+    // 数据一致性检查器
+    // 检查 NameNode 记录的 block 副本，在 DataNode 上是否还能正常读取、是否损坏、大小是否和元数据一致
     class ConsistencyChecker
     {
     public:

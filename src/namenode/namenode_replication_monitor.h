@@ -15,6 +15,8 @@ namespace mini_storage
         std::vector<DataNodeId> dead_locations;     // 已宕机的 DN
     };
 
+    // 副本数量监控器。检查每个 block 当前还有多少个有效副本
+    // 根据 namenode中存放的metadata和datanode的元数据信息，进行副本数量监控
     class ReplicationMonitor
     {
     public:

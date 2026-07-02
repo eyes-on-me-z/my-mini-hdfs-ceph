@@ -67,6 +67,7 @@ namespace mini_storage
         return it->second;
     }
 
+    // 更新datanode的健康状态
     // 超过 10 秒没心跳 -> ALIVE 变 SUSPECT
     // 超过 30 秒没心跳 -> 变 DEAD
     // 已经 DEAD 的节点跳过

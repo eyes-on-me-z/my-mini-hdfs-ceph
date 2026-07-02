@@ -23,6 +23,9 @@ namespace mini_storage
         std::string error;
     };
 
+    // 副本复制/副本修复器
+    // 当某个 block 的副本数量不足时，从一个还活着的 DataNode 上读取这个 block，
+    // 再写到另一个目标 DataNode 上，从而补齐副本
     class BlockReplicator
     {
     public:
