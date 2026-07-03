@@ -18,17 +18,36 @@ namespace mini_storage
 
     class NameNodeServer
     {
+    public:
+        NameNodeServer(const std::string &data_dir, const std::string &host,
+                        int port, int num_workers = 4);
+        ~NameNodeServer();
 
-        
+        bool Start();
+        void Run();
+        void Stop();
+
+        DataNodeManager* GetDataNodeManager() { return dn_manager_.get(); }
+        MetadataStore* GetMetadataStore() { return metadata_.get(); }
+        FaultDetector* GetFaultDetector() { return fault_detector_.get(); }
+
     private:
         void OnMessage(std::shared_ptr<TcpConnection> conn, const std::string &data);
         void ProcessRequest(std::shared_ptr<TcpConnection> conn, const std::string &data);
 
         NameNodeResponse HandleCreateFile(const CreateFileRequest &req);
         NameNodeResponse HandleAllocateBlock(const AllocateBlockRequest &req);
-        NameNodeResponse HandleGetFileBlocks(const GetFileBlocksResponse &req);
+        NameNodeResponse HandleGetFileBlocks(const GetFileBlocksRequest &req);
+        NameNodeResponse HandleDeleteFile(const DeleteFileRequest &req);
+        NameNodeResponse HandleListFiles(const ListFilesRequest &req);
+        NameNodeResponse HandleRegisterDN(const RegisterDataNodeRequest &req);
+        NameNodeResponse HandleHeartbeat(const HeartbeatRequest &req);
+        NameNodeResponse HandleBlockReport(const BlockReportRequest &req);
 
-        std::string data_dir_;
+        // 周期性状态检查和打印日志，打印当前 DataNode 状态
+        void StartHealthCheckTimer();
+
+        std::string data_dir_;  // 保存 NameNode 的本地数据目录路径，如 edit log
         std::string host_;
         int port_;
 
