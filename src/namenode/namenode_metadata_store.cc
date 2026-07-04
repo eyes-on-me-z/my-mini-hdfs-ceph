@@ -16,7 +16,7 @@ namespace mini_storage
     {
         std::unique_lock<std::shared_mutex> lock(mutex_);   // 写锁
 
-        if (files_.count(path)) return false;
+        if (files_.count(path)) return false;   // 文件已存在
 
         FileInfo info;
         info.path = path;
