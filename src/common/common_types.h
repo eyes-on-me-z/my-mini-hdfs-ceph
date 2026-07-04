@@ -3,8 +3,6 @@
 #include <cstdint>
 #include <string>
 
-// 未完成
-
 namespace mini_storage
 {
     using BlockId = uint64_t;
@@ -15,6 +13,7 @@ namespace mini_storage
     constexpr int64_t kBlockSize = 4 *1024 * 1024;  //  4MB 逻辑 block 大小
     constexpr int kReplicationFactor = 3;           // 默认的 block 副本数
     constexpr int kHeartbeatTimeoutSec = 30;        // DataNode 心跳超时时间是 30 秒
+    constexpr int kHeartbeatIntervalSec = 3;
 
     // NameNode 里描述一个 block 的元数据信息
     struct BlockInfo

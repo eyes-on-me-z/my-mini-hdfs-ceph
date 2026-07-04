@@ -5,6 +5,7 @@
 #include <thread>
 
 #include "datanode_block_store.h"
+#include "namenode.pb.h"
 
 namespace mini_storage
 {
@@ -22,6 +23,10 @@ namespace mini_storage
 
     private:
         bool RegisterSelf();
+        bool SendBlockReport();
+        bool SendHeartbeat();
+        void HeartbeatLoop();
+        bool SendToNameNode(const NameNodeRequest &req, NameNodeResponse *resp);
         
         std::string datanode_id_;
         std::string nn_host_;

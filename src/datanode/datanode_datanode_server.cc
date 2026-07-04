@@ -7,10 +7,6 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
-/*
-关于客户端的未完成
-*/
-
 namespace mini_storage
 {
     DataNodeServer::DataNodeServer(const std::string &data_dir,
@@ -32,7 +28,11 @@ namespace mini_storage
 
     bool DataNodeServer::Start()
     {
-
+        // Start NameNode client (register + heartbeat)
+        if (!nn_client_->Start())
+        {
+            
+        }
     }
 
     void DataNodeServer::Stop()

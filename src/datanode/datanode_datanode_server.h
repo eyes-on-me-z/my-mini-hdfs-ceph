@@ -9,8 +9,6 @@
 
 namespace mini_storage
 {
-    // 客户端相关暂未实现
-
     class DataNodeServer
     {
     public:

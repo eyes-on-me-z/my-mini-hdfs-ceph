@@ -79,7 +79,7 @@ message RegisterDataNodeRequest
 message HeartbeatRequest
 {
     string datanode_id = 1; // 发送心跳的 DataNode ID
-    int64 timestamp = 2;    // 心跳发送时间
+    int64 timestamp = 2;    // 心跳发送时间, 以namenode接收到的时间为准
     int64 free_space = 3;   // DataNode 当前剩余空间
     int64 block_count = 4;  // DataNode 当前保存的 block 数量
 }
