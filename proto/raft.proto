@@ -1,0 +1,50 @@
+syntax = "proto3";
+package mini_storage;
+
+// A single entry in the Raft log
+message RaftLogEntry
+{
+    uint64 term = 1;
+    uint64 index = 2;
+    bytes command = 3;  // Serialized NameNodeRequest
+}
+
+// ---- RequestVote RPC ----
+
+// 当某个节点超时没有收到 leader 心跳时，它会变成 candidate，
+// 然后向其他节点发送这个请求，请求它们给自己投票
+message RequestVoteRequest
+{
+    uint64 term = 1;            // 候选人当前任期号
+    string candidate_id = 2;    // 候选人的节点 ID
+    uint64 last_log_index = 3;  // 候选人最后一条日志的 index, 用来判断候选人的日志是否足够新
+    uint64 last_log_term = 4;   // 候选人最后一条日志的 term, 也是用来判断日志新旧
+}
+
+message RequestVoteResponse
+{
+    /*
+    candidate 收到响应后会比较这个 term 和自己的 current_term_。
+    如果响应里的 term 更大，说明 candidate 已经过时了，必须退回 follower
+    */
+    uint64 term = 1;        // 响应方当前的任期号
+    bool vote_granted = 2;  // 是否同意投票
+}
+
+// ---- AppendEntries RPC ----
+
+// leader 发给 follower 的日志复制请求
+message AppendEntriesRequest
+{
+    /*
+    leader 发送日志时，不是直接说“你把这些 entries 加上”，而是先要求 follower 检查
+    在 pre_log_index 这个位置，你有没有对应日志？
+    follower 会检查: 我本地 index = pre_log_index 的日志，它的 term 是否等于 pre_log_term？
+    */
+    uint64 term = 1;                    // leader 当前任期
+    string leader_id = 2;               // leader 的节点 ID
+    uint64 pre_log_index = 3;           // 新日志前一条日志的 index
+    uint64 pre_log_term = 4;            // 新日志前一条日志的 term
+    repeated RaftLogEntry entries = 5;  // leader 要复制给 follower 的日志列表。当 entries 为空时，它就是 leader 心跳
+    uint64 leader_commit = 6;           // leader 已经提交到哪个日志 index
+}

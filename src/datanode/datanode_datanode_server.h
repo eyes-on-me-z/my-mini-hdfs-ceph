@@ -9,6 +9,7 @@
 
 namespace mini_storage
 {
+    // 一致性检查作为客户端
     class DataNodeServer
     {
     public:

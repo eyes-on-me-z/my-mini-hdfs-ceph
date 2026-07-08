@@ -23,6 +23,7 @@ namespace mini_storage
 
     private:
         bool RegisterSelf();
+        // DataNode 把自己本地保存的所有 block 列表上报给 NameNode
         bool SendBlockReport();
         bool SendHeartbeat();
         void HeartbeatLoop();

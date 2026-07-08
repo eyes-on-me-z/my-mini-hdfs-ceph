@@ -28,16 +28,23 @@ namespace mini_storage
 
     bool DataNodeServer::Start()
     {
-        // Start NameNode client (register + heartbeat)
-        if (!nn_client_->Start())
-        {
-            
-        }
+        // Start NameNode client (register + SendBlockReport + heartbeat)
+        if (!nn_client_->Start()) return false;
+
+        // Start listen thread
+        std::thread([this] { ListenLoop(); }).detach();
+        return true;
     }
 
     void DataNodeServer::Stop()
     {
-
+        stop_.store(true);
+        nn_client_->Stop();
+        if (server_fd_ >= 0)
+        {
+            close(server_fd_);
+            server_fd_ = -1;
+        }
     }
 
     void DataNodeServer::ListenLoop()

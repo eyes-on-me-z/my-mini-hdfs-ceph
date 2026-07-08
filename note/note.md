@@ -77,3 +77,21 @@ select、poll、epoll的区别是什么
 #### 客户端读取文件流程
 
 ![image-20260628160210040](note.assets/image-20260628160210040.png)
+
+
+Raft 选举流程大概是：
+follower 长时间没收到 leader 心跳。
+它认为 leader 可能挂了。
+它把自己变成 candidate。
+current_term_++，进入新任期。
+先投票给自己。
+向其他节点发送 RequestVote。
+收到多数票后，成为 leader。
+
+
+在 Raft 里，客户端提交写请求时，leader 会：
+把命令追加到本地日志。
+发给 follower 复制。
+等待多数节点复制成功。
+日志变成 committed。
+唤醒正在等待的客户端线程。
