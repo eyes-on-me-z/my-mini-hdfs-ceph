@@ -43,8 +43,88 @@ message AppendEntriesRequest
     */
     uint64 term = 1;                    // leader 当前任期
     string leader_id = 2;               // leader 的节点 ID
-    uint64 pre_log_index = 3;           // 新日志前一条日志的 index
-    uint64 pre_log_term = 4;            // 新日志前一条日志的 term
+    uint64 prev_log_index = 3;           // 新日志前一条日志的 index
+    uint64 prev_log_term = 4;            // 新日志前一条日志的 term
     repeated RaftLogEntry entries = 5;  // leader 要复制给 follower 的日志列表。当 entries 为空时，它就是 leader 心跳
     uint64 leader_commit = 6;           // leader 已经提交到哪个日志 index
+}
+
+message AppendEntriesResponse
+{
+    uint64 term = 1;        // follower 当前任期号
+    bool success = 2;
+    uint64 match_index = 3; // follower 当前已经成功匹配/复制到的最大日志 index
+}
+
+// ---- InstallSnapshot RPC ----
+
+// 当 follower 落后太多，而 leader 已经把早期日志压缩成 snapshot 后，
+// leader 就不能再靠普通 AppendEntries 补齐旧日志了，这时会把快照发给 follower
+// 普通日志复制：给你缺的几条日志   安装快照：直接给你一个压缩后的完整状态
+message InstallSnapshotRequest
+{
+    uint64 term = 1;                // leader 当前任期
+    string leader_id = 2;           // leader 的节点 ID
+    uint64 last_included_index = 3; // 快照包含到的最后一条日志 index
+    uint64 last_included_term = 4;  // 对应日志的 term
+    bytes snapshot_data = 5;        // 真正的快照数据
+}
+
+message InstallSnapshotResponse
+{
+    uint64 term = 1;    // follower 当前任期号
+    bool success = 2;
+}
+
+// ---- Snapshot data (stored in snapshot file) ----
+
+// 本地保存到 snapshot 文件里的快照数据格式
+message SnapshotMetadata
+{
+    uint64 last_included_index = 1; // 这个快照包含到的最后一条 Raft 日志 index
+    uint64 last_included_term = 2;  // 对应的 term
+    bytes metadata_store_data = 3;  // 真正的状态机快照数据 Serialized MetadataStoreSnapshot
+}
+
+message MetadataStoreSnapshot
+{
+    message FileEntry   // 一个文件的元数据记录
+    {
+        string path = 1;            // 文件路径
+        int64 size = 2;             // 文件大小
+        int64 create_time = 3;      // 创建时间
+        int64 modify_time = 4;      // 修改时间
+        repeated uint64 blocks = 5; // 这个文件包含的 block ID 列表
+    }
+    message BlockEntry  // 一个 block 的元数据记录
+    {
+        uint64 block_id = 1;    // block 的唯一 ID
+        int64 size = 2;         // block 大小
+        repeated string locations = 3;  // 保存这个 block 的 DataNode 列表
+    }
+    repeated FileEntry files = 1;
+    repeated BlockEntry blocks = 2;
+}
+
+// ---- Top-level Raft message wrapper ----
+
+message RaftMessage
+{
+    enum Type
+    {
+        REQUEST_VOTE = 0;
+        REQUEST_VOTE_RESPONSE = 1;
+        APPEND_ENTRIES = 2;
+        APPEND_ENTRIES_RESPONSE = 3;
+        INSTALL_SNAPSHOT = 4;
+        INSTALL_SNAPSHOT_RESPONSE = 5;
+    }
+    Type type = 1;
+
+    RequestVoteRequest request_vote = 10;
+    RequestVoteResponse request_vote_response = 11;
+    AppendEntriesRequest append_entries = 12;
+    AppendEntriesResponse append_entries_response = 13;
+    InstallSnapshotRequest install_snapshot = 14;
+    InstallSnapshotResponse install_snapshot_response = 15;
 }
