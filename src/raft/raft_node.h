@@ -29,7 +29,7 @@ namespace mini_storage
         std::vector<std::string> peers; // 其他 Raft 节点列表
         std::string data_dir;   // Raft 本地持久化目录, 用来保存 Raft 相关数据
         int election_timeout_ms = 3000; // 选举超时时间
-        int heartbeat_interval_ms = 500;    // leader 心跳间隔
+        int heartbeat_interval_ms = 500;    // leader 心跳间隔  当前 ResetElectionTimer() 没有使用 heartbeat_interval_ms
         int snapshot_interval = 10000;  // 快照间隔。通常表示日志增长到一定数量后触发快照，避免 Raft log 无限增长
     };
 

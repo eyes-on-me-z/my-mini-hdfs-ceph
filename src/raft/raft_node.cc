@@ -46,9 +46,26 @@ namespace mini_storage
     size_t RaftNode::GetLogSize() const;
 
     // Timer
+    // 选举定时器到期时触发。leader：发送心跳，重置定时器。follower：成为候选者，开始选举，重置定时器
     void RaftNode::OnElectionTimeout()
     {
-        
+        RaftState s;
+        {
+            std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+            s = state_;
+        }
+
+        if (s == RaftState::LEADER)
+        {
+            SendHeartbeats();
+            ResetElectionTimer();
+        }
+        else
+        {
+            BecomeCandidate();
+            StartElection();
+            ResetElectionTimer();
+        }
     }
 
     // Snapshot
@@ -399,16 +416,37 @@ namespace mini_storage
     }
 
     // 重新设置选举超时时间
+    // leader: now + heartbeat_interval_ms
+    // follower: now + election_timeout_ms ~ 2 * election_timeout_ms
     void RaftNode::ResetElectionTimer()
     {
         std::lock_guard<std::mutex> lock(timer_mutex_);
 
-        int timeout_ms = RandomElectionTimeout();
+        int timeout_ms;
+        {
+            std::lock_guard<std::recursive_mutex> state_lock(state_mutex_);
+            if (state_ == RaftState::LEADER) timeout_ms = config_.heartbeat_interval_ms;
+            else timeout_ms = RandomElectionTimeout();
+        }
         election_deadline_ = std::chrono::steady_clock::now()
                             + std::chrono::milliseconds(timeout_ms);
     }
 
-    void RaftNode::TimerLoop();
+    // Raft 节点的后台定时器线程，负责不断检查“选举超时时间到了没有”
+    void RaftNode::TimerLoop()
+    {
+        while(!stop_.load())
+        {
+            bool should_fire = false;
+            {
+                std::lock_guard<std::mutex> lock(timer_mutex_);
+                auto now = std::chrono::steady_clock::now();
+                should_fire = (now >= election_deadline_);
+            }
+            if (should_fire) OnElectionTimeout();
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
 
     // 生成一个随机的选举超时时间，单位是毫秒
     // 随机化的主要目的是避免多个 Follower 同时超时、同时成为 Candidate，
