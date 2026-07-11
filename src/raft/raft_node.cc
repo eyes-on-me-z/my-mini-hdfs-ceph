@@ -26,12 +26,29 @@ namespace mini_storage
         Stop();
     }
 
+    // 负责恢复持久化状态、初始化身份、启动后台定时器线程
     bool RaftNode::Start()
     {
-
+        RestoreState();
+        RestoreFromSnapshot();
+        BecomeFollower(current_term_);
+        stop_.store(false);
+        ResetElectionTimer();
+        timer_thread_ = std::thread(&RaftNode::TimerLoop, this);
+        std::cout << "[Raft " << my_id_ << "] Started term=" << current_term_
+                << " log_size=" << (log_.size() - 1) << std::endl;
+        
+        return true;
     }
 
-    void RaftNode::Stop();
+    void RaftNode::Stop()
+    {
+        stop_.store(true);
+        if (timer_thread_.joinable())
+        {
+            timer_thread_.join();
+        }
+    }
 
     ProposeResult RaftNode::Propose(const std::string &command, int timeout_ms = 5000);
 
@@ -114,17 +131,208 @@ namespace mini_storage
         return true;
     }
 
-    // Handle an incoming request. If non-null response is returned, caller sends it back.
+    // 处理别人发来的“请求投票”，这个节点要不要把当前任期的一票投给对方
     RequestVoteResponse* RaftNode::HandleRequestVote(const std::string &from,
-                                            const RequestVoteRequest &req);
+                                            const RequestVoteRequest &req)
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+
+        vote_resp_.set_term(current_term_);
+
+        // 对方任期比自己旧。Raft 里旧任期的候选人不能拿到新任期节点的票
+        if (req.term() < current_term_)
+        {
+            vote_resp_.set_vote_granted(false); // 直接拒绝
+            return &vote_resp_;
+        }
+
+        // 对方任期比自己新
+        if (req.term() > current_term_)
+        {
+            current_term_ = req.term();
+            state_ = RaftState::FOLLOWER;   // 退回 follower
+            voted_for_.clear();     // 进入了新任期，本任期还没投票
+            leader_id_.clear();     // 旧 leader 不再属于当前任期
+            PersistState();
+            vote_resp_.set_term(current_term_);
+        }
+
+        // 判断自己能不能投票
+        bool can_vote = false;
+        // 当前任期还没投过票 或 已经投过这个候选人（处理 RPC 重试）
+        if (voted_for_.empty() || voted_for_ == req.candidate_id())
+        {
+            // Raft 的投票规则要求：不能把票投给日志比自己旧的候选人
+            uint64_t my_last_term = log_.back().term;
+            uint64_t my_last_index = log_.back().index;
+            if (req.last_log_term() > my_last_term ||
+                (req.last_log_term() == my_last_term && req.last_log_index() >= my_last_index))
+            {
+                can_vote = true;
+            }
+        }
+
+        if (can_vote)
+        {
+            // 记录这一任期投给了谁，并持久化
+            // 这里持久化很重要，因为 Raft 要保证“一个节点在同一任期最多投一票”，
+            // 即使节点崩溃重启也不能忘记自己投过谁
+            voted_for_ = req.candidate_id();
+            PersistState();
+            vote_resp_.set_vote_granted(true);
+            ResetElectionTimer();   // 因为已经认可了一个候选人，暂时不应该马上自己发起选举
+            std::cout << "[Raft " << my_id_ << "] Voted for " << req.candidate_id()
+                << " in term " << current_term_ << std::endl;
+        }
+        else
+        {
+            vote_resp_.set_vote_granted(false);
+        }
+
+        return &vote_resp_;
+    }
+    
     AppendEntriesResponse* RaftNode::HandleAppendEntries(const std::string &from,
-                                                const AppendEntriesRequest &req);
+                                                const AppendEntriesRequest &req)
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+        ae_resp_.set_term(current_term_);
+
+        // 如果 leader 的 term 比自己旧
+        if (req.term() < current_term_)
+        {
+            ae_resp_.set_success(false);
+            return &ae_resp_;
+        }
+
+        // 如果请求的 term 比自己新
+        if (req.term() > current_term_)
+        {
+            current_term_ = req.term();
+            state_ = RaftState::FOLLOWER;
+            voted_for_.clear(); // 清空 voted_for_，因为新 term 还没投票
+            PersistState();
+            ae_resp_.set_term(current_term_);
+        }
+
+        leader_id_ = from;
+        state_ = RaftState::FOLLOWER;
+        ResetElectionTimer();
+
+        uint64_t prev_log_index = req.prev_log_index();
+        uint64_t prev_log_term = req.prev_log_term();
+
+        // 如果 follower 日志太短
+        if (prev_log_index > log_.back().index)
+        {
+            ae_resp_.set_success(false);
+            ae_resp_.set_match_index(log_.back().index);
+            return &ae_resp_;
+        }
+
+        if (prev_log_index >= snapshot_last_index_)
+        {
+            const LogEntry *prev = GetLogEntry(prev_log_index);
+
+            if (prev && prev->term != prev_log_term)
+            {
+                // 截断 follower 的冲突日志。从 prev_log_index 开始往后找第一个 term 和 prev_log_term 不同的位置，
+                // 然后把这个位置以及之后的日志全部删除
+                for (uint64_t idx = prev_log_index; idx <= log_.back().index; ++idx)
+                {
+                    const LogEntry *e = GetLogEntry(idx);
+                    if (e && e->term != prev_log_term)
+                    {
+                        while(log_.back().index >= idx)
+                        {
+                            log_.pop_back();
+                        }
+                        break;
+                    }
+                }
+                ae_resp_.set_success(false);
+                ae_resp_.set_match_index(log_.back().index);
+                PersistState();
+                return &ae_resp_;
+            }
+        }
+        else    // leader 要检查的那条日志，比 follower 的快照点还旧
+        {       // 也就是说 follower 本地已经没有这条普通日志了，因为它被快照压缩掉了
+            if (prev_log_index != snapshot_last_index_ || prev_log_term != snapshot_last_term_)
+            {
+                ae_resp_.set_success(false);
+                ae_resp_.set_match_index(snapshot_last_index_);
+                return &ae_resp_;
+            }
+        }
+
+        // 日志匹配成功后，开始追加新日志
+        for (int i = 0; i < req.entries_size(); ++i)
+        {
+            const auto &entry = req.entries(i);
+            uint64_t entry_index = entry.index();
+            if (entry_index > log_.back().index)
+            {
+                LogEntry le;
+                le.index = entry.index();
+                le.term = entry.term();
+                le.command = entry.command();
+                log_.push_back(le);
+            }
+        }
+        PersistState();
+
+        if (req.leader_commit() > commit_index_)
+        {
+            // follower 的 commit_index_ 不能超过 leader 的提交进度，也不能超过自己本地已有日志的最后位置
+            uint64_t new_commit = std::min(req.leader_commit(), log_.back().index);
+            if (new_commit > commit_index_)
+            {
+                commit_index_ = new_commit;
+                ApplyCommitted(commit_index_);
+            }
+        }
+
+        ae_resp_.set_success(true);
+        ae_resp_.set_match_index(log_.back().index);
+        return &ae_resp_;
+    }
+
     InstallSnapshotResponse* RaftNode::HandleInstallSnapshot(const std::string &from,
                                                     const InstallSnapshotRequest &req);                                     
 
     // Handle response messages (arriving from peers we sent requests to)
     void RaftNode::HandleRequestVoteResponse(const std::string &from,
-                                    const RequestVoteResponse &resp);
+                                    const RequestVoteResponse &resp)
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+
+        // 如果对方任期更高，自己立刻认输并退回 follower
+        if (resp.term() > current_term_)
+        {
+            // 任何节点只要发现更高的 term，就必须更新自己的 current_term_，并变成 follower
+            current_term_ = resp.term();
+            state_ = RaftState::FOLLOWER;
+            voted_for_.clear();     // 本任期还没有投票记录
+            leader_id_.clear();     // 新 term 里 leader 还未知
+            PersistState(); 
+            return;
+        }
+
+        if (state_ != RaftState::CANDIDATE) return;
+        if (resp.term() < current_term_) return;
+
+        if (resp.vote_granted())
+        {
+            votes_received_++;
+            std::cout << "[Raft " << my_id_ << "] Got vote from " << from
+                    << " (" << votes_received_ << "/" << config_.peers.size() << ")\n";
+
+            int majority = (int)config_.peers.size() / 2 + 1;
+            if (votes_received_ >= majority) BecomeLeader();
+        }
+    }
+
     void RaftNode::HandleAppendEntriesResponse(const std::string &from,
                                     const AppendEntriesResponse &resp);
 
@@ -132,7 +340,7 @@ namespace mini_storage
     std::string RaftNode::GetSnapshotData() const;
 
     // 把当前节点切换为 Follower（跟随者）
-    // 参数 term 是触发此次状态转换的任期，通常来自其他节点发送的 RPC
+    // 参数 term 是触发此次状态转换的任期
     void RaftNode::BecomeFollower(uint64_t term)
     {
         std::lock_guard<std::recursive_mutex> lock(state_mutex_);
@@ -296,7 +504,22 @@ namespace mini_storage
     }
 
     void RaftNode::AdvanceCommitIndex();
-    void RaftNode::ApplyCommitted(uint64_t up_to_index);
+
+    // 把已经提交的 Raft 日志应用到上层状态机
+    void RaftNode::ApplyCommitted(uint64_t up_to_index)
+    {
+        // up_to_index 表示最多应用到哪一条日志。
+        // last_applied_ 表示已经应用到哪一条日志。
+        while(last_applied_ < up_to_index)
+        {
+            last_applied_++;
+            const LogEntry *entry = GetLogEntry(last_applied_);
+            if (entry && !entry->command.empty() && apply_cb_)
+            {
+                apply_cb_(last_applied_, entry->command);
+            }
+        }
+    }
 
     LogEntry* RaftNode::GetLogEntry(uint64_t index)
     {
@@ -318,7 +541,7 @@ namespace mini_storage
         return nullptr;
     }
 
-    // 把 Raft 节点的重要状态写入磁盘，节点重启后可由 RestoreState() 恢复
+    // 把 Raft 节点的重要状态（任期，投票，日志）写入磁盘，节点重启后可由 RestoreState() 恢复
     bool RaftNode::PersistState()
     {
         // std::ios::trunc：如果文件已存在，先清空原内容；如果不存在，则创建文件。
