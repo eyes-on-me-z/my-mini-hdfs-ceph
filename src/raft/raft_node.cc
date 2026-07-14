@@ -50,7 +50,81 @@ namespace mini_storage
         }
     }
 
-    ProposeResult RaftNode::Propose(const std::string &command, int timeout_ms = 5000);
+    // 客户端向 Raft 集群提交一条命令 的入口
+    RaftNode::ProposeResult RaftNode::Propose(const std::string &command, int timeout_ms)
+    {
+        // 初始化返回结果
+        ProposeResult result;
+        result.committed = false;
+        result.is_leader = false;
+
+        {
+            std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+
+            // 判断自己是不是 leader。Raft 里只有 leader 能处理写请求
+            if (state_ != RaftState::LEADER)
+            {
+                result.leader_id = leader_id_;
+                return result;
+            }
+
+            // leader 把 command 追加到本地日志
+            result.is_leader = true;
+
+            LogEntry entry;
+            entry.term = current_term_;
+            entry.index = log_.back().index + 1;
+            entry.command = command;
+            log_.push_back(entry);
+            PersistState();
+
+            // 更新 leader 自己的复制进度
+            next_index_[my_id_] = entry.index + 1;
+            match_index_[my_id_] = entry.index;
+            result.index = entry.index;
+        }
+
+        // Try to advance commit immediately (needed for single-node clusters)
+        // 尝试推进 commit，并发送复制请求
+        {
+            std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+            // 单节点集群立即提交新日志
+            // 尝试提交之前已经复制到多数派、但还没来得及推进的日志
+            AdvanceCommitIndex();   
+        }
+
+        SendHeartbeats();
+
+        {
+            std::unique_lock<std::mutex> lock(propose_mutex_);
+            auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms);
+
+            while(true)
+            {
+                {
+                    std::lock_guard<std::recursive_mutex> sl(state_mutex_);
+
+                    // 提交成功优先于 leader 身份变化。
+                    if (commit_index_ >= result.index)  // 这条日志已经提交
+                    {
+                        result.committed = true;
+                        break;
+                    }
+
+                    if (state_ != RaftState::LEADER)    // 等待过程中自己不再是 leader
+                    {
+                        result.is_leader = false;
+                        result.leader_id = leader_id_;
+                        break;
+                    }
+                }
+                // 如果一直没有提交，直到超时
+                if (propose_cv_.wait_until(lock, deadline) == std::cv_status::timeout) break;
+            }
+        }
+
+        return result;
+    }
 
     // Query
     bool RaftNode::IsLeader() const;
@@ -298,8 +372,103 @@ namespace mini_storage
         return &ae_resp_;
     }
 
+    // follower 处理 leader 发来的 InstallSnapshot RPC 的函数
+    // 当 follower 落后太多，leader 已经没有足够旧日志可以通过 AppendEntries 补齐时，
+    // leader 直接把一个快照发给 follower，让 follower 用快照追上状态
     InstallSnapshotResponse* RaftNode::HandleInstallSnapshot(const std::string &from,
-                                                    const InstallSnapshotRequest &req);                                     
+                                                    const InstallSnapshotRequest &req)
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+        snap_resp_.set_term(current_term_);
+
+        // 拒绝旧 term 的快照
+        if (req.term() < current_term_)
+        {
+            snap_resp_.set_success(false);
+            return &snap_resp_;
+        }
+
+        // 如果请求 term 更新，就更新自己 term
+        if (req.term() > current_term_)
+        {
+            current_term_ = req.term();
+            voted_for_.clear();
+            leader_id_.clear();
+            state_ = RaftState::FOLLOWER;
+            PersistState();
+            snap_resp_.set_term(current_term_);
+        }
+
+        leader_id_ = from;
+        state_ = RaftState::FOLLOWER;
+        ResetElectionTimer();
+
+        // 忽略旧快照。
+        // leader 发来的快照并不比自己现有快照新，或者快照 index 不超过自己已经提交的 index，就认为不需要安装
+        if (req.last_included_index() <= snapshot_last_term_ ||
+            req.last_included_index() <= commit_index_)
+        {
+            snap_resp_.set_success(true);
+            return &snap_resp_;
+        }
+
+        // 构造快照元数据并序列化
+        SnapshotMetadata snap;
+        snap.set_last_included_term(req.last_included_term());
+        snap.set_last_included_index(req.last_included_index());
+        snap.set_metadata_store_data(req.snapshot_data());
+
+        std::string serialized;
+        snap.SerializeToString(&serialized);
+
+        // 写入快照文件。先写到临时文件，写完后 rename 成正式快照文件
+        std::string tmp_path = SnapshotFilePath() + ".tmp";
+        {
+            std::ofstream file(tmp_path, std::ios::binary | std::ios::trunc);
+            if (!file.is_open())
+            {
+                snap_resp_.set_success(false);
+                return &snap_resp_;
+            }
+
+            uint64_t len = serialized.size();
+            file.write(reinterpret_cast<const char*>(&len), 8);
+            file.write(serialized.data(), len);
+            file.close();
+        }
+        fs::rename(tmp_path, SnapshotFilePath());
+
+        // 把快照恢复到状态机
+        if (restore_cb_ && !req.snapshot_data().empty())
+            restore_cb_(req.snapshot_data());
+
+        // 更新 snapshot 元信息
+        snapshot_last_index_ = req.last_included_index();
+        snapshot_last_term_ = req.last_included_term();
+
+        // 删除快照覆盖掉的旧日志。log index <= snapshot_last_index_ 的日志都可以删
+        std::vector<LogEntry> new_log;
+        new_log.push_back(log_[0]);
+        for (size_t i = 1; i < log_.size(); ++i)
+        {
+            if (log_[i].index > snapshot_last_index_)
+                new_log.push_back(log_[i]);
+        }
+        log_.swap(new_log);
+
+        // 推进 commit / apply 指针
+        if (commit_index_ < snapshot_last_index_)
+        {
+            commit_index_ = snapshot_last_index_;
+            last_applied_ = snapshot_last_index_;
+        }
+        PersistState();
+        snap_resp_.set_success(true);
+
+        std::cout << "[Raft " << my_id_ << "] Installed snapshot from " << from
+                << " at index " << req.last_included_index() << std::endl;
+        return &snap_resp_;
+    }                          
 
     // Handle response messages (arriving from peers we sent requests to)
     void RaftNode::HandleRequestVoteResponse(const std::string &from,
@@ -333,8 +502,49 @@ namespace mini_storage
         }
     }
 
+    // leader 收到 follower 对 AppendEntries 的响应之后，更新复制进度
     void RaftNode::HandleAppendEntriesResponse(const std::string &from,
-                                    const AppendEntriesResponse &resp);
+                                    const AppendEntriesResponse &resp)
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+
+        // 响应里的 term 比自己新
+        // Raft 规则：只要发现更高 term，当前节点必须退回 follower。
+        // 所以这里更新 current_term_，清空投票记录和 leader 记录，持久化，然后返回
+        if (resp.term() > current_term_)
+        {
+            current_term_ = resp.term();
+            state_ = RaftState::FOLLOWER;
+            voted_for_.clear();
+            leader_id_.clear();
+            PersistState();
+            return;
+        }
+
+        // 自己已经不是 leader
+        if (state_ != RaftState::LEADER) return;
+
+        if (resp.success())     // 响应成功
+        {
+            match_index_[from] = resp.match_index();    // leader 已知 follower from 已经复制成功的最高日志 index
+            next_index_[from] = resp.match_index() + 1; // leader 下一次要从哪个日志 index 开始给这个 follower 发送日志
+            AdvanceCommitIndex();   // 尝试推进 leader 的 commit_index_
+        }
+        else        // 响应失败
+        {
+            // AppendEntries 失败时，leader 并不能可靠确认 follower 新复制成功了哪一条日志，
+            // 所以不能更新 match_index_。失败时通常只回退next_index_[from]
+            uint64_t match = resp.match_index();
+            if (match < next_index_[from])
+            {
+                // 不要退到 leader 本地 snapshot 之前，因为 leader 已经没有那些日志了
+                next_index_[from] = std::max(match + 1, snapshot_last_index_ + 1);
+                if (next_index_[from] < 1) next_index_[from] = 1;
+            }
+        }
+
+        propose_cv_.notify_all();
+    }
 
     // Serialize current MetadataStore state for snapshot
     std::string RaftNode::GetSnapshotData() const;
@@ -503,7 +713,39 @@ namespace mini_storage
         }
     }
 
-    void RaftNode::AdvanceCommitIndex();
+    // leader 判断某个日志条目是否已经被多数节点复制，如果满足条件，就把它标记为已提交，并应用到状态机
+    void RaftNode::AdvanceCommitIndex()
+    {
+        /*
+        如果存在一个 N，大于当前 commitIndex，且多数节点的 matchIndex[i] >= N，
+        并且 log[N].term == currentTerm，则令 commitIndex = N。
+        */
+
+        uint64_t last_log_index = log_.back().index;
+        for (uint64_t n = last_log_index; n > commit_index_; --n)
+        {
+            const LogEntry *entry  = GetLogEntry(n);
+            // leader 只能通过计数多数派来提交当前任期的日志。即使某条旧任期日志已经被多数节点复制，
+            // 当前 leader 也不会直接把它作为推进点。只有找到一条 term == current_term_ 的日志并且它被多数节点复制，
+            // 才能提交到那里。不过一旦提交到某个当前任期日志 n，那么 n 之前的旧任期日志也会一起被间接提交
+            if (!entry || entry->term != current_term_) continue;
+            int count = 1;      // leader 自己肯定有这条日志，所以先计数为 1
+            for (const auto &peer : config_.peers)
+            {
+                if (peer == my_id_) continue;
+                auto it = match_index_.find(peer);
+                if (it != match_index_.end() && it->second >= n) count++;
+            }
+            int majority = (int)config_.peers.size() / 2 + 1;
+            if (count >= majority)      // 如果拥有日志 n 的节点数达到多数派
+            {
+                commit_index_ = n;
+                ApplyCommitted(commit_index_);
+                propose_cv_.notify_all();       // 唤醒等待 Propose() 提交结果的线程
+                break;
+            }
+        }
+    }
 
     // 把已经提交的 Raft 日志应用到上层状态机
     void RaftNode::ApplyCommitted(uint64_t up_to_index)
