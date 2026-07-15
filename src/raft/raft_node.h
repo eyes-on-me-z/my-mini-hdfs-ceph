@@ -81,7 +81,7 @@ namespace mini_storage
         uint64_t GetCommitIndex() const;
         uint64_t GetLastLogIndex() const;
         uint64_t GetLastLogTerm() const;
-        size_t GetLogSize() const;
+        size_t GetLogSize() const;  // 获取日志条数
 
         // Callbacks
         void SetApplyCallback(ApplyCallback cb) { apply_cb_ = std::move(cb); }
@@ -151,7 +151,8 @@ namespace mini_storage
         RaftConfig config_;             // 保存节点配置
         uint64_t current_term_{0};      // 当前任期号
         std::string voted_for_;         // 当前任期投票给了谁
-        std::vector<LogEntry> log_;     // Raft 日志
+        // TakeSnapshot() 成功写完快照之后，HandleInstallSnapshot() 安装 leader 快照之后才会删除删除log_
+        std::vector<LogEntry> log_;     // Raft 日志。
         uint64_t commit_index_{0};      // 已经被多数节点确认、可以认为“提交成功”的最大日志下标
         uint64_t last_applied_{0};      // 已经真正应用到状态机的最大日志下标
         std::unordered_map<std::string, uint64_t> next_index_;  // leader 认为下次应该发给某个 follower 的日志下标

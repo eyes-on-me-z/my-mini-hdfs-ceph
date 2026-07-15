@@ -127,14 +127,53 @@ namespace mini_storage
     }
 
     // Query
-    bool RaftNode::IsLeader() const;
-    std::string RaftNode::GetLeaderId() const;
-    RaftState RaftNode::GetState() const;
-    uint64_t RaftNode::GetCurrentTerm() const;
-    uint64_t RaftNode::GetCommitIndex() const;
-    uint64_t RaftNode::GetLastLogIndex() const;
-    uint64_t RaftNode::GetLastLogTerm() const;
-    size_t RaftNode::GetLogSize() const;
+    bool RaftNode::IsLeader() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+        return state_ == RaftState::LEADER;
+    }
+
+    std::string RaftNode::GetLeaderId() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+        return leader_id_;
+    }
+
+    RaftState RaftNode::GetState() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+        return state_;
+    }
+
+    uint64_t RaftNode::GetCurrentTerm() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+        return current_term_;
+    }
+
+    uint64_t RaftNode::GetCommitIndex() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+        return commit_index_;
+    }
+
+    uint64_t RaftNode::GetLastLogIndex() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+        return log_.back().index;
+    }
+
+    uint64_t RaftNode::GetLastLogTerm() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+        return log_.back().term;
+    }
+
+    size_t RaftNode::GetLogSize() const
+    {
+        std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+        return log_.size() - 1;
+    }
 
     // Timer
     // 选举定时器到期时触发。leader：发送心跳，重置定时器。follower：成为候选者，开始选举，重置定时器
@@ -159,8 +198,68 @@ namespace mini_storage
         }
     }
 
-    // Snapshot
-    bool RaftNode::TakeSnapshot();
+    // 把已经应用到状态机的日志压缩掉，减少日志文件长度
+    // 从状态机拿一份快照数据，写入快照文件，然后删除已被快照覆盖的日志。
+    bool RaftNode::TakeSnapshot()
+    {
+        // 没有快照回调就直接失败
+        if (!snapshot_cb_) return false;
+
+        // 取当前可快照的位置
+        std::string data;               // 状态机快照的实际内容
+        uint64_t last_included_index;   // 这次快照覆盖到的最后一条日志 index
+        uint64_t last_included_term;    // 对应日志的 term
+        {
+            std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+            // 表示当前节点已经应用到状态机的最高日志 index
+            // 表示当前已有快照已经覆盖到的最高日志 index
+            if (last_applied_ <= snapshot_last_index_) return false;
+            data = snapshot_cb_();
+            last_included_index = last_applied_;    // 快照最多只能覆盖已经应用到状态机的日志
+            const LogEntry *entry = GetLogEntry(last_included_index);
+            last_included_term = entry ? entry->term : current_term_;
+        }
+
+        // 构造并序列化快照元数据
+        SnapshotMetadata snap;
+        snap.set_last_included_index(last_included_index);
+        snap.set_last_included_term(last_included_term);
+        snap.set_metadata_store_data(data);
+
+        std::string serialized;
+        snap.SerializeToString(&serialized);
+
+        // 写入快照文件
+        std::string tmp = SnapshotFilePath() + ".tmp";
+        {
+            std::ofstream file(tmp, std::ios::binary | std::ios::trunc);
+            if (!file.is_open()) return false;
+
+            uint64_t len = serialized.size();
+            file.write(reinterpret_cast<const char*>(&len), 8);
+            file.write(serialized.data(), len);
+        }
+        fs::rename(tmp, SnapshotFilePath());
+
+        // 更新本地 snapshot 元信息并裁剪日志
+        {
+            std::lock_guard<std::recursive_mutex> lock(state_mutex_);
+            snapshot_last_index_ = last_included_index;
+            snapshot_last_term_ = last_included_term;
+            std::vector<LogEntry> new_log;
+            new_log.push_back(log_[0]);
+            for (size_t i = 1; i < log_.size(); ++i)
+            {
+                if (log_[i].index > last_included_index)
+                    new_log.push_back(log_[i]);
+            }
+            log_.swap(new_log);
+            PersistState();
+        }
+
+        std::cout << "[Raft " << my_id_ << "] Snapshot at index " << last_included_index << std::endl;
+        return true;
+    }
 
     // 用于节点启动时，从 raft_snapshot.dat 恢复状态机快照
     bool RaftNode::RestoreFromSnapshot()
@@ -545,9 +644,6 @@ namespace mini_storage
 
         propose_cv_.notify_all();
     }
-
-    // Serialize current MetadataStore state for snapshot
-    std::string RaftNode::GetSnapshotData() const;
 
     // 把当前节点切换为 Follower（跟随者）
     // 参数 term 是触发此次状态转换的任期
