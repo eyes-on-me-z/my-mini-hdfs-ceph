@@ -169,11 +169,10 @@ namespace mini_storage
         }
         }
 
+        // 把请求处理结果发回原连接
         std::string reply_bytes;
         if (reply.SerializeToString(&reply_bytes))
             conn->Send(reply_bytes);
     }
-
-    void RaftRPC::HandleIncoming(const RaftMessage &msg);
 
 } // namespace mini_storage

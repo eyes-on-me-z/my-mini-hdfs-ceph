@@ -300,6 +300,8 @@ namespace mini_storage
         return resp;
     }
 
+    // 处理 DataNode 上报自己当前持有哪些 block 的请求，也就是 HDFS 里常说的 Block Report
+    // 让 NameNode 更新自己维护的“block 在哪些 DataNode 上”这份元数据
     NameNodeResponse NameNodeServer::HandleBlockReport(const BlockReportRequest &req)
     {
         NameNodeResponse resp;
@@ -310,6 +312,8 @@ namespace mini_storage
             metadata_->UpdateBlockLocation(block.block_id(), req.datanode_id());
             // Also update block size if we see it for first time
             auto existing = metadata_->GetBlock(block.block_id());
+            // 如果这个 block 已经存在，并且 NameNode 里记录的 size 还是 0，
+            // 而 DataNode 上报的 size 大于 0，说明 NameNode 之前可能只知道这个 block 的存在，但不知道真实大小。
             if (existing.has_value() && existing->size == 0 && block.size() > 0)
             {
                 BlockInfo info = *existing;

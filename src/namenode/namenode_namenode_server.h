@@ -42,6 +42,7 @@ namespace mini_storage
         NameNodeResponse HandleListFiles(const ListFilesRequest &req);
         NameNodeResponse HandleRegisterDN(const RegisterDataNodeRequest &req);
         NameNodeResponse HandleHeartbeat(const HeartbeatRequest &req);
+        // 处理 DataNode 上报自己当前持有哪些 block 的请求，也就是 HDFS 里常说的 Block Report
         NameNodeResponse HandleBlockReport(const BlockReportRequest &req);
 
         // 周期性状态检查和打印日志，打印当前 DataNode 状态

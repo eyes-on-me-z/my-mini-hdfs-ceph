@@ -25,9 +25,11 @@ namespace mini_storage
         void Stop();
 
         // Send a RaftMessage to a specific peer (peer_id format: "host:port")
+        // SendMessage 负责发出请求，并同步接收该请求的响应
         bool SendMessage(const std::string &peer_id, const RaftMessage &msg);
 
     private:
+        // OnMessage 主要处理别人发来的请求
         void OnMessage(std::shared_ptr<TcpConnection> conn, const std::string &data);
         void HandleIncoming(const RaftMessage &msg);
 

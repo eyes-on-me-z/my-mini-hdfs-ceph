@@ -12,6 +12,17 @@
 
 #include "raft.pb.h"
 
+//////////////////////////////////////////////////////////////////////////////////////////
+/*
+正常情况下 LogEntry.index 设计上应该是递增的：entry.index = log_.back().index + 1;
+但这里有一个潜在 bug：快照裁剪后，代码保留的是 log_[0] 这个哨兵日志，它的 index 仍然是 0
+这时再 Propose，新日志会被分配成 1，就不是全局递增了。
+当前代码意图上 LogEntry.index 是递增的；在没有快照裁到只剩哨兵日志时也是递增的。
+但快照后只剩 dummy log 的场景下，Propose() 用 log_.back().index + 1 会导致 index 回退，
+应该改成基于 max(log_.back().index, snapshot_last_index_) + 1 更稳。
+*/
+//////////////////////////////////////////////////////////////////////////////////////////
+
 namespace mini_storage
 {
     // Raft 节点的角色
@@ -83,7 +94,7 @@ namespace mini_storage
         uint64_t GetLastLogTerm() const;
         size_t GetLogSize() const;  // 获取日志条数
 
-        // Callbacks
+        // Callbacks (在HANameNodeServer中调用)
         void SetApplyCallback(ApplyCallback cb) { apply_cb_ = std::move(cb); }
         void SetSendRPCCallback(SendRPCCallback cb) { send_rpc_cb_ = std::move(cb); }
         void SetSnapshotCallback(SnapshotCallback cb) { snapshot_cb_ = std::move(cb); }
