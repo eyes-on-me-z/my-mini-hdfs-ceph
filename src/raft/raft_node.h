@@ -50,7 +50,7 @@ namespace mini_storage
         // leader 不直接让每个节点随便改状态，而是先把操作写成日志，然后复制到多数节点，确认提交后再执行
         uint64_t term = 0;  // 这条日志产生时的任期号
         uint64_t index = 0; // 这条日志在 Raft log 里的位置
-        std::string command;    // 真正要执行的命令
+        std::string command;    // 真正要执行的命令, serialized NameNodeRequest
     };
 
     using ApplyCallback = std::function<void(uint64_t, const std::string&)>;    // 日志提交后，应用到状态机
@@ -104,7 +104,7 @@ namespace mini_storage
         void OnElectionTimeout();
 
         // Snapshot
-        bool TakeSnapshot();
+        bool TakeSnapshot();    // 把已经应用到状态机的日志压缩掉，减少日志文件长度
         bool RestoreFromSnapshot();
 
         // === RPC processing (called by RaftRPC) ===
@@ -194,9 +194,9 @@ namespace mini_storage
         std::condition_variable propose_cv_;    // 用于让提交请求的线程等待某个条件发生
         std::mutex propose_mutex_;
 
-        ApplyCallback apply_cb_;
-        SendRPCCallback send_rpc_cb_;
-        SnapshotCallback snapshot_cb_;
+        ApplyCallback apply_cb_;        // 绑定的是 HANameNodeServer::OnApplyCommitted
+        SendRPCCallback send_rpc_cb_;   // 实际上绑定的是 RaftRPC::SendMessage
+        SnapshotCallback snapshot_cb_;  // 绑定的是 HANameNodeServer::TakeMetadataSnapshot
         RestoreCallback restore_cb_;
 
         // Pool of response objects (reused to avoid allocation)

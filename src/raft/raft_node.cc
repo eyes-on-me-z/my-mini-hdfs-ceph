@@ -73,7 +73,7 @@ namespace mini_storage
 
             LogEntry entry;
             entry.term = current_term_;
-            entry.index = log_.back().index + 1;
+            entry.index = log_.back().index + 1;    // 这里
             entry.command = command;
             log_.push_back(entry);
             PersistState();

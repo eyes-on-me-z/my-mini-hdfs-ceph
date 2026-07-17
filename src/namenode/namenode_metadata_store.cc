@@ -12,6 +12,8 @@ namespace mini_storage
             std::chrono::system_clock::now().time_since_epoch()).count();
     }
 
+    // 在 NameNode 的元数据表里登记一个文件，并不会真的在 DataNode 上写数据,
+    // 并没有更新 block 元数据
     bool MetadataStore::CreateFile(const FilePath &path, FileInfo *out_info)
     {
         std::unique_lock<std::shared_mutex> lock(mutex_);   // 写锁

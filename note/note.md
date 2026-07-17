@@ -1,3 +1,6 @@
+OnXxx 通常表示“当 Xxx 事件发生时执行”，大多是回调/事件处理函数，但本质上只是命名约定，真正是否为回调要看它有没有被注册或异步触发。
+
+
 SSTable 是 Sorted String Table 的缩写，意思是“有序字符串表”。
 在 LSM-Tree / LevelDB / RocksDB 这类存储系统里，SSTable 通常指一种磁盘上的不可变有序文件：
 里面存的是很多 key-value 数据
@@ -95,3 +98,33 @@ current_term_++，进入新任期。
 等待多数节点复制成功。
 日志变成 committed。
 唤醒正在等待的客户端线程。
+
+
+
+当前实现存在的问题：
+
+HANameNodeServer::ApplyAllocateBlock
+这里有个设计细节：它依赖当前节点本地的 dn_manager_ 存活 DataNode 状态。
+如果不同 NameNode 上看到的 alive DataNode 不一致，理论上可能导致各节点 apply 出来的 block locations 不一致。
+课程项目里可能接受这个简化；严格 Raft 状态机通常要求 apply 结果完全确定。
+更严谨的做法通常有几种：
+1. ALLOCATE_BLOCK 时由 leader 选定 block_id 和 locations，然后把这些确定结果写进 Raft log。Follower apply 时只按日志里的结果更新 metadata，不再本地重新选择 DataNode。
+
+2. 把 DataNode 注册、心跳状态、可用空间等也纳入 Raft 状态机，让所有 NameNode 的 dn_manager_ 一致。不过心跳频繁，这样成本比较高。
+
+3. 只有 leader 处理分配，follower 不根据本地 dn_manager_ 做决策；follower 只 replay leader 已经决定好的 block 分配结果。
+
+对这个项目来说，最自然的是第 1 种：leader 做决策，Raft log 复制决策结果，而不是复制“请你自己分配一下”这个意图。
+
+
+RaftNode::Propose
+正常情况下 LogEntry.index 设计上应该是递增的：entry.index = log_.back().index + 1;
+但这里有一个潜在 bug：快照裁剪后，代码保留的是 log_[0] 这个哨兵日志，它的 index 仍然是 0
+这时再 Propose，新日志会被分配成 1，就不是全局递增了。
+当前代码意图上 LogEntry.index 是递增的；在没有快照裁到只剩哨兵日志时也是递增的。
+但快照后只剩 dummy log 的场景下，Propose() 用 log_.back().index + 1 会导致 index 回退，
+应该改成基于 max(log_.back().index, snapshot_last_index_) + 1 更稳。
+
+
+HANameNodeServer::RestoreMetadataSnapshot
+这个函数只追加/覆盖 snapshot 里的 block 和 file，但没有看到它先清空整个 metadata_。如果恢复前 metadata_ 里存在 snapshot 中没有的旧文件或旧 block，可能会残留。严格实现里通常需要先清空 metadata，再完整恢复。

@@ -48,16 +48,16 @@ namespace mini_storage
         bool IsLeader();
 
     private:
-        // Client request handling (same protocol as NameNodeServer)
-        void OnClientMessage(std::shared_ptr<TcpConnection> conn, const std::string &data);
+        // Client request handling (same protocol as NameNodeServer), 处理用户请求是用线程池
+        void OnClientMessage(std::shared_ptr<TcpConnection> conn, const std::string &data); // 异步调用 ProcessClientRequest
         void ProcessClientRequest(std::shared_ptr<TcpConnection> conn, const std::string &data);
 
         // Raft callbacks
-        void OnApplyCommitted(uint64_t index, const std::string &command);
+        void OnApplyCommitted(uint64_t index, const std::string &command);  // command = serialize NameNodeRequest
         void OnSendRaftRPC(const std::string &peer_id, const RaftMessage &msg);
 
         // Snapshot support
-        std::string TakeMetadataSnapshot();
+        std::string TakeMetadataSnapshot();     // 当 Raft 需要做 snapshot 时，就会回调它
         bool RestoreMetadataSnapshot(const std::string &data);
 
         // Propose a write operation through Raft

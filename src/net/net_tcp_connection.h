@@ -24,8 +24,8 @@ namespace mini_storage
         void Send(const std::string &data);
         void Close();
 
-        void SetMessageCallback(MessageCallback cb) { msg_cb_ = std::move(cb); }
-        void SetCloseCallback(CloseCallback cb) { close_cb_ = std::move(cb); }
+        void SetMessageCallback(MessageCallback cb) { msg_cb_ = std::move(cb); }    //在 TcpServer::HandleNewConnection 中设置
+        void SetCloseCallback(CloseCallback cb) { close_cb_ = std::move(cb); }  //在 TcpServer::HandleNewConnection 中设置
         
         int fd() const { return fd_; }
 
