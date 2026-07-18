@@ -197,7 +197,7 @@ namespace mini_storage
         ApplyCallback apply_cb_;        // 绑定的是 HANameNodeServer::OnApplyCommitted
         SendRPCCallback send_rpc_cb_;   // 实际上绑定的是 RaftRPC::SendMessage
         SnapshotCallback snapshot_cb_;  // 绑定的是 HANameNodeServer::TakeMetadataSnapshot
-        RestoreCallback restore_cb_;
+        RestoreCallback restore_cb_;    // 绑定的是 HANameNodeServer::RestoreMetadataSnapshot
 
         // Pool of response objects (reused to avoid allocation)
         RequestVoteResponse vote_resp_;

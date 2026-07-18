@@ -346,14 +346,218 @@ namespace mini_storage
     }
 
     // Propose a write operation through Raft
-    NameNodeResponse HANameNodeServer::ProposeWrite(const NameNodeRequest &req, int timeout_ms = 5000);
+    // 把 NameNode 的写操作交给 Raft 复制和提交，等提交成功后，再从本地 MetadataStore 读取结果，构造响应返回给客户端
+    NameNodeResponse HANameNodeServer::ProposeWrite(const NameNodeRequest &req, int timeout_ms)
+    {
+        NameNodeResponse resp;
+        resp.set_request_id(req.request_id());
 
-    // Direct handlers (for reads and ephemeral ops)
-    NameNodeResponse HANameNodeServer::HandleGetFileBlocks(const GetFileBlocksRequest &req);
-    NameNodeResponse HANameNodeServer::HandleListFiles(const ListFilesRequest &req);
-    NameNodeResponse HANameNodeServer::HandleRegisterDN(const RegisterDataNodeRequest &req);
-    NameNodeResponse HANameNodeServer::HandleHeartbeat(const HeartbeatRequest &req);
-    NameNodeResponse HANameNodeServer::HandleBlockReport(const BlockReportRequest &req);
+        // 必须是 Leader。HA 写请求只能由 leader 接收
+        if (!raft_node_->IsLeader())
+        {
+            std::string leader = raft_node_->GetLeaderId();
+            resp.set_success(false);
+            resp.set_error("Not leader. Leader: " + leader);
+            return resp;
+        }
+
+        // 序列化请求
+        std::string command;
+        if (!req.SerializeToString(&command))
+        {
+            resp.set_success(false);
+            resp.set_error("Failed to serialize command");
+            return resp;
+        }
+
+        // 提交给 Raft。
+        // Propose() 会把 command 追加到 leader 的 Raft 日志，
+        // 然后通过 AppendEntries 复制给 follower。多数派复制成功后，leader 推进 commit_index_，
+        // 调用：ApplyCommitted()，再触发：apply_cb_，而这个 callback 在构造函数里绑定到了：HANameNodeServer::OnApplyCommitted()
+        auto result = raft_node_->Propose(command, timeout_ms);
+
+        // 处理 Raft 失败情况
+        if (!result.is_leader)  // 写入过程中当前节点失去了 leader 身份
+        {
+            resp.set_success(false);
+            resp.set_error("Not leader anymore. Leader: " + result.leader_id);
+            return resp;
+        }
+
+        if (!result.committed)  // 请求在超时时间内没有被多数派提交
+        {
+            resp.set_success(false);
+            resp.set_error("Request timed out (not committed)");
+            return resp;
+        }
+
+        // 如果 result.committed == true，那么对应 Raft log 已经 commit，并且在当前实现里已经同步 apply 到 MetadataStore
+        // 根据 apply 后的 MetadataStore 构造响应
+        switch (req.op())
+        {
+        case NameNodeRequest::CREATE_FILE:
+        {
+            auto file = metadata_->GetFile(req.create_file().path());
+            resp.set_success(file.has_value());
+            if (!file.has_value())
+                resp.set_error("Failed to create file: " + req.create_file().path());
+            break;
+        }
+        case NameNodeRequest::DELETE_FILE:
+        {
+            auto file = metadata_->GetFile(req.delete_file().path());
+            resp.set_success(!file.has_value());
+            if (file.has_value())
+                resp.set_error("Failed to delete file: " + req.delete_file().path());
+            break;
+        }
+        case NameNodeRequest::ALLOCATE_BLOCK:   // 暂时没办法得知分配block是否成功，默认成功
+        {
+            auto file = metadata_->GetFile(req.allocate_block().file_path());
+            // 如果文件存在且 blocks 不为空，就取最后一个 block 作为刚分配的 block
+            if (file.has_value() && !file->blocks.empty())
+            {
+                BlockId last_bid = file->blocks.back();
+                auto block = metadata_->GetBlock(last_bid);
+                auto *ar = resp.mutable_allocate_block();
+                ar->set_success(true);
+                ar->set_block_id(last_bid);
+                if (block.has_value())
+                {
+                    for (const auto &dn : block->locations)
+                        ar->add_datanode_addresses(dn);
+                }
+                resp.set_success(true);
+            }
+            else
+            {
+                resp.set_success(false);
+                resp.set_error("Block allocation failed");
+            }
+            break;
+        }
+        default:
+        {
+            resp.set_success(false);
+            resp.set_error("Unknown write operation");
+            break;
+        }
+        }
+
+        return resp;
+    }
+
+    // 读请求处理函数，它不走 Raft，直接从当前 NameNode 本地的 MetadataStore 读取文件和 block 信息
+    NameNodeResponse HANameNodeServer::HandleGetFileBlocks(const GetFileBlocksRequest &req)
+    {
+        NameNodeResponse resp;
+        auto file = metadata_->GetFile(req.path());
+        // 如果找不到
+        if (!file.has_value())
+        {
+            resp.set_success(false);
+            resp.set_error("File not found: " + req.path());
+            return resp;
+        }
+
+        resp.set_success(true);
+        auto *gr = resp.mutable_get_file_blocks();
+        gr->set_success(true);
+        gr->set_path(file->path);
+        gr->set_size(file->size);
+        for (const auto &bid : file->blocks)    // 遍历这个文件包含的 block id
+        {
+            auto block = metadata_->GetBlock(bid);
+            auto *bl = gr->add_blocks();
+            bl->set_block_id(bid);
+            if (block.has_value())
+            {
+                bl->set_size(block->size);
+                for (const auto &loc : block->locations)
+                    bl->add_datanodes(loc);
+            }
+        }
+
+        return resp;
+    }
+
+    // 列目录/列文件的读请求处理函数, 不走 Raft，直接读本地 MetadataStore
+    NameNodeResponse HANameNodeServer::HandleListFiles(const ListFilesRequest &req)
+    {
+        NameNodeResponse resp;
+        resp.set_success(true);
+        auto *lr = resp.mutable_list_files();
+        lr->set_success(true);
+        auto files = metadata_->ListFiles(req.dir());   // 从 MetadataStore 中找出目录 req.dir() 下的文件
+        for (const auto &file : files)
+        {
+            auto *af = lr->add_files();
+            af->set_path(file.path);
+            af->set_size(file.size);
+            af->set_create_time(file.create_time);
+            af->set_block_count((int32_t)file.blocks.size());
+        }
+        
+        return resp;
+    }
+
+    // DataNode 注册请求 的处理函数。DataNode 启动后会向 NameNode 报到，
+    // NameNode 收到后把这个 DataNode 加入 DataNodeManager 管理
+    NameNodeResponse HANameNodeServer::HandleRegisterDN(const RegisterDataNodeRequest &req)
+    {
+        /*
+        这个函数在 ProcessClientRequest 里属于直接处理，不走 Raft
+        也就是说 DataNode 注册信息是 每个 HA NameNode 本地维护的临时状态，不是通过 Raft 复制的持久元数据
+        文件目录、block 元数据这种核心命名空间状态要走 Raft；DataNode 心跳、在线状态、剩余空间这类易变信息通常可以本地维护，
+        靠 DataNode 向多个 NameNode 注册/心跳来更新
+        */
+
+        NameNodeResponse resp;
+        
+        DataNodeInfo dn;
+        dn.id = req.datanode_id();
+        dn.host = req.host();
+        dn.port = req.port();
+        dn.free_space = req.free_space();
+        dn_manager_->RegisterDataNode(dn);  // 里面会设置时间和状态
+        
+        resp.set_success(true);
+        return resp;
+    }
+
+    // DataNode 心跳处理函数, DataNode 注册之后，会定期向 NameNode 发送 heartbeat
+    NameNodeResponse HANameNodeServer::HandleHeartbeat(const HeartbeatRequest &req)
+    {
+        NameNodeResponse resp;
+
+        bool ok = dn_manager_->HandleHeartbeat(req.datanode_id(), req.free_space(), req.block_count());
+        
+        resp.set_success(ok);
+        if (!ok) resp.set_error("DataNode not registered: " + req.datanode_id());
+
+        return resp;
+    }
+
+    // DataNode 块汇报处理函数。
+    // DataNode 会把自己本地有哪些 block 汇报给 NameNode，NameNode 用它来更新 block 的位置信息和大小信息
+    NameNodeResponse HANameNodeServer::HandleBlockReport(const BlockReportRequest &req)
+    {
+        NameNodeResponse resp;
+        for (const auto &item : req.blocks())
+        {
+            metadata_->UpdateBlockLocation(item.block_id(), req.datanode_id());
+            auto block = metadata_->GetBlock(item.block_id());
+            if (block.has_value() && block->size == 0 && item.size() > 0)
+            {
+                BlockInfo bi = *block;
+                bi.size = item.size();
+                metadata_->UpdateBlock(bi);
+            }
+        }
+
+        resp.set_success(true);
+        return resp;
+    }
 
     // Apply handlers (called when Raft commits a log entry)
     void HANameNodeServer::ApplyCreateFile(const CreateFileRequest &req)
@@ -416,5 +620,34 @@ namespace mini_storage
     }
 
     // Health check
-    void HANameNodeServer::StartHealthCheckTimer();
+    void HANameNodeServer::StartHealthCheckTimer()
+    {
+        health_check_thread_ = std::thread([this](){
+            while(!stop_.load())
+            {
+                // 每 5 秒执行一次检查
+                std::this_thread::sleep_for(std::chrono::seconds(5));
+                if (!stop_.load())
+                {
+                    // 核心健康检查
+                    dn_manager_->CheckDataNodeHealth();
+                    std::cout << "[HANameNode] DataNodes: "
+                            << dn_manager_->AliveCount() << " alive / "
+                            << dn_manager_->TotalCount() << " total"
+                            << " | Raft: " << (IsLeader() ? "LEADER" : "FOLLOWER")
+                            << std::endl;
+
+                    // 只有 Leader 负责主动创建快照
+                    if (IsLeader() && raft_node_->GetLogSize() > 50)
+                        raft_node_->TakeSnapshot();
+                    
+                    /*
+                    快照的作用是压缩 Raft 日志。Raft 日志一直追加，如果不清理会越来越大。
+                    TakeSnapshot() 会通过之前注册的 snapshot callback 把当前 MetadataStore 序列化保存，然后截断旧日志
+                    */
+                }
+            }
+        });
+    }
+
 } // namespace mini_storage

@@ -128,3 +128,16 @@ RaftNode::Propose
 
 HANameNodeServer::RestoreMetadataSnapshot
 这个函数只追加/覆盖 snapshot 里的 block 和 file，但没有看到它先清空整个 metadata_。如果恢复前 metadata_ 里存在 snapshot 中没有的旧文件或旧 block，可能会残留。严格实现里通常需要先清空 metadata，再完整恢复。
+
+
+HANameNodeServer::ProposeWrite
+case NameNodeRequest::ALLOCATE_BLOCK:   // 暂时没办法得知分配 block 是否成功，这里默认成功，日后再做修改
+可利用下面的实现：
+// For propose-to-apply result passing
+// 客户端请求提交到 Raft 后，等待该请求真正 apply 到状态机，然后把结果传回给等待线程
+std::mutex propose_result_mutex_;   // 保护 propose_results_ 这个共享 map
+std::condition_variable propose_result_cv_;
+std::unordered_map<uint64_t, NameNodeResponse> propose_results_;
+std::unordered_map<uint64_t, NameNodeResponse> propose_results_;
+key是Raft log index，value是创建文件，删除文件，为文件分配block的NameNodeResponse，然后HANameNodeServer::ProposeWrite读取结果的时候，可以从result的Raft log index作为key，去propose_results_中查找对应的response。解决了无法知道allocate block是否成功的问题。
+需要清理 propose_results_。要在 ProposeWrite 取完后 erase，否则这个 map 会随着写请求越来越大

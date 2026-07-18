@@ -19,6 +19,7 @@ namespace mini_storage
         return true;
     }
 
+    // 返回false代表该datanode未注册
     bool DataNodeManager::HandleHeartbeat(const std::string &id, int64_t free_space, int32_t block_count)
     {
         std::lock_guard<std::mutex> lock(mutex_);

@@ -50,7 +50,7 @@ namespace mini_storage
         }
     }
 
-    // 客户端向 Raft 集群提交一条命令 的入口
+    // 客户端向 Raft 集群提交一条命令 的入口（command = serialized NameNodeRequest）
     RaftNode::ProposeResult RaftNode::Propose(const std::string &command, int timeout_ms)
     {
         // 初始化返回结果

@@ -116,7 +116,7 @@ message NameNodeRequest
     uint64 request_id = 2;
 
     CreateFileRequest create_file = 10;
-    AllocateBlockRequest allocate_block = 11;
+    AllocateBlockRequest allocate_block = 11;   // 仅分配 block id 和位置
     GetFileBlocksRequest get_file_blocks = 12;
     DeleteFileRequest delete_file = 13;
     ListFilesRequest list_files = 14;
